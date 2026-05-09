@@ -61,9 +61,9 @@ def detect_multiple_coins(pil_image: Image.Image):
 
 def parse_workflow_result(result):
     """
-    Parses the workflow output. The result is typically a list of dictionaries.
-    We assume the first element contains 'counts', 'total_coins', 'total_cents',
-    and that an annotated image (base64) is in the 'visualization' field.
+    Parses the workflow output. The result is expected to be a list of dictionaries.
+    Assumes the first element contains the aggregated counts and total cents,
+    and an annotated image in base64 or URL format.
     """
     annotated_image = None
     counts_5c = 0
@@ -71,34 +71,55 @@ def parse_workflow_result(result):
     total_coins = 0
     total_cents = 0
 
-    # The workflow returns a list; take the first output
+    # 1. Get the main output object (flexibly handle list or dict)
     if isinstance(result, list) and len(result) > 0:
         output = result[0]
     elif isinstance(result, dict):
         output = result
     else:
-        output = {}
+        # If the response type is unknown, return None and log a warning
+        st.warning("The API response format is not as expected.")
+        st.json(result) # Show the raw response as a fallback
+        return annotated_image, counts_5c, counts_25c, total_coins, total_cents
 
-    # Extract counts and totals
-    counts_5c = output.get("counts", {}).get("5c", 0)
-    counts_25c = output.get("counts", {}).get("25c", 0)
-    total_coins = output.get("total_coins", 0)
-    total_cents = output.get("total_cents", 0)
+    # 2. Safely get the necessary output dictionary
+    outputs = output.get('outputs', {})
 
-    # Extract annotated image (base64 string)
-    vis = output.get("visualization", {})
-    if isinstance(vis, dict):
-        b64_image = vis.get("base64") or vis.get("image")
-    else:
-        b64_image = output.get("annotated_image")
+    # 3. Extract counts and totals
+    # The exact key name may vary. The most common one is 'counts'.
+    counts = outputs.get('counts', {})
+    if not counts:
+        # Fallback: try accessing a top-level "counts" dictionary in the output
+        counts = output.get('counts', {})
 
-    if b64_image:
+    counts_5c = counts.get('5c', 0)
+    counts_25c = counts.get('25c', 0)
+    total_coins = counts_5c + counts_25c
+    total_cents = (counts_5c * 5) + (counts_25c * 25)
+
+    # 4. Extract and decode the annotated image (base64)
+    # The annotation visual might be inside 'visualization'
+    visualization = outputs.get('visualization', {})
+    if not visualization:
+        # Fallback: check top-level 'visualization' or 'annotated_image'
+        visualization = output.get('visualization', {}) or output.get('annotated_image')
+
+    # Determine the image data (could be a dictionary or a direct string)
+    image_data = None
+    if isinstance(visualization, dict):
+        # Look for base64 or image key inside the dict
+        image_data = visualization.get('base64') or visualization.get('image')
+    elif isinstance(visualization, str):
+        image_data = visualization
+
+    if image_data:
         import base64
-        # Remove data URL prefix if present
-        if isinstance(b64_image, str) and b64_image.startswith("data:image"):
-            b64_image = b64_image.split(",")[1]
+        # Remove data URL prefix if it exists (e.g., "data:image/png;base64,")
+        if isinstance(image_data, str) and image_data.startswith("data:image"):
+            image_data = image_data.split(",")[1]
         try:
-            img_bytes = base64.b64decode(b64_image)
+            # Decode the base64 string into bytes and then into a PIL Image
+            img_bytes = base64.b64decode(image_data)
             annotated_image = Image.open(io.BytesIO(img_bytes))
         except Exception as e:
             st.error(f"Could not decode annotated image: {e}")
