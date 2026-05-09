@@ -141,7 +141,6 @@ if uploaded_file is not None:
                     st.write(list(result[0].keys()))
             # --- End of debugging lines ---
             annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
-...
 
         with col2:
             st.success("### Detection Summary")
