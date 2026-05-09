@@ -1,4 +1,3 @@
-python -m pip install streamlit tensorflow pillow inference-sdk requests
 import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
