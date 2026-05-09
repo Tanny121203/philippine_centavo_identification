@@ -59,18 +59,12 @@ def detect_multiple_coins(pil_image: Image.Image):
     return result
 
 def parse_workflow_result(result):
-    """
-    Parses the Roboflow workflow output.
-    Handles multiple possible structures.
-    """
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
 
-    # Unwrap list and 'outputs' wrapper
+    # Unwrap if result is a list
     if isinstance(result, list) and len(result) > 0:
         result = result[0]
-    if isinstance(result, dict) and "outputs" in result:
-        result = result["outputs"][0]
 
     if not isinstance(result, dict):
         st.error(f"Unexpected result type: {type(result)}")
@@ -87,37 +81,25 @@ def parse_workflow_result(result):
         except Exception as e:
             st.warning(f"Image decode error: {e}")
 
-    # Try multiple possible keys for predictions
-    predictions_key = None
-    for key in ["predictions", "objects", "detections", "results"]:
-        if key in result:
-            predictions_key = key
-            break
-    if predictions_key is None:
-        # Debug: show the keys we have
-        st.error("No predictions key found. Available keys: " + ", ".join(result.keys()))
-        return annotated_image, 0, 0, 0, 0
+    # Navigate to the predictions list – note the nested structure
+    predictions_data = result.get("predictions", {})
+    predictions_list = predictions_data.get("predictions", [])
+    
+    # If the top-level already has a "predictions" list directly, use that
+    if not predictions_list and "predictions" in result:
+        predictions_list = result["predictions"]
+        if isinstance(predictions_list, dict):
+            predictions_list = predictions_list.get("predictions", [])
 
-    predictions = result[predictions_key]
-    for det in predictions:
-        class_name = None
-        confidence = 0
-        if isinstance(det, dict):
-            # Try different possible field names for class
-            class_name = det.get("class") or det.get("class_name") or det.get("label") or det.get("name")
-            confidence = det.get("confidence", 0)
-        elif isinstance(det, str):
-            class_name = det
-        else:
-            continue
-
-        # Filter low confidence detections (adjust threshold as needed)
+    for det in predictions_list:
+        class_name = det.get("class", "")
+        confidence = det.get("confidence", 0)
+        # Filter low confidence detections
         if confidence < 0.5:
             continue
-
-        if class_name and class_name.startswith("5c"):
+        if class_name.startswith("5c"):
             counts["5c"] += 1
-        elif class_name and class_name.startswith("25c"):
+        elif class_name.startswith("25c"):
             counts["25c"] += 1
 
     total_coins = counts["5c"] + counts["25c"]
@@ -153,18 +135,16 @@ if uploaded_file is not None:
         with st.spinner("Running Roboflow detection workflow..."):
             result = detect_multiple_coins(original_image)
             
-            # ---------- DEBUG: Show result without the huge image ----------
+            # Optional: Show debug without the huge image (temporary)
             result_copy = result
             if isinstance(result_copy, list) and len(result_copy) > 0:
-                result_copy = result_copy[0]  # unwrap for display
+                result_copy = result_copy[0]
             if isinstance(result_copy, dict):
                 result_copy = result_copy.copy()
-                # Remove large image fields
                 for field in ["output_image", "visualization", "image", "base64"]:
                     result_copy.pop(field, None)
-            with st.expander("🔍 Debug: Raw API Response (image omitted)"):
+            with st.expander("🔍 Debug: Raw API Response"):
                 st.json(result_copy)
-            # ----------------------------------------------------------------
             
             annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
 
@@ -179,7 +159,7 @@ if uploaded_file is not None:
         if annotated_img:
             st.image(annotated_img, caption="Annotated Output", width=600)
         else:
-            st.warning("Annotated image not available. See debug output for raw response.")
+            st.warning("Annotated image not available.")
 
 else:
     st.info("Please upload an image to start.")
