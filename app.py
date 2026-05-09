@@ -1,0 +1,200 @@
+pip install streamlit tensorflow pillow inference-sdk requests
+import streamlit as st
+import tensorflow as tf
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+from PIL import Image
+import numpy as np
+import io
+import requests
+from inference_sdk import InferenceHTTPClient
+
+# -------------------------------
+# 1. Configuration
+# -------------------------------
+st.set_page_config(page_title="Philippine Centavo Recognizer", layout="wide")
+
+# Path to your saved .h5 model (single‑coin classification)
+MODEL_PATH = "coin_model_3class.h5"
+
+# Roboflow workflow credentials
+ROBOFLOW_API_KEY = "zsOtQhpDpJk2J4HquyBJ"
+WORKSPACE_NAME = "jazeels-workspace-pcssh"
+WORKFLOW_ID = "ddetect-count-and-visualize-5"   # your workflow ID
+API_URL = "https://serverless.roboflow.com"
+
+# -------------------------------
+# 2. Load classification model (cached)
+# -------------------------------
+@st.cache_resource
+def load_classification_model():
+    model = tf.keras.models.load_model(MODEL_PATH)
+    return model
+
+# Classes as they were trained (3 classes)
+CLASS_NAMES = ['5c_front', '5c_back', '25c']
+
+def predict_single_coin(image: Image.Image):
+    """Predict a single coin image => final '5c' or '25c'."""
+    model = load_classification_model()
+    # Preprocess exactly as in training
+    img = image.convert('RGB').resize((224, 224))
+    x = np.array(img)
+    x = preprocess_input(x)                 # scales to [-1, 1]
+    x = np.expand_dims(x, axis=0)
+    pred = model.predict(x, verbose=0)[0]
+    idx = np.argmax(pred)
+    raw_label = CLASS_NAMES[idx]
+    confidence = pred[idx]
+    # Map front/back to base coin type
+    final_label = '5c' if raw_label.startswith('5c') else '25c'
+    return final_label, confidence, raw_label
+
+# -------------------------------
+# 3. Roboflow multi‑coin detection
+# -------------------------------
+@st.cache_resource
+def get_roboflow_client():
+    return InferenceHTTPClient(api_url=API_URL, api_key=ROBOFLOW_API_KEY)
+
+def detect_multiple_coins(image_bytes):
+    """Send image to Roboflow workflow and parse the result."""
+    client = get_roboflow_client()
+    # The workflow expects an image file path or bytes. We'll use a temporary file.
+    # However, the SDK also accepts a dictionary with the image content.
+    # We'll upload the bytes as a file-like object.
+    result = client.run_workflow(
+        workspace_name=WORKSPACE_NAME,
+        workflow_id=WORKFLOW_ID,
+        images={"image": image_bytes},   # bytes of the uploaded image
+        use_cache=True
+    )
+    return result
+
+def parse_workflow_result(result):
+    """
+    Extract annotated image, counts, total coins, total cents from the workflow output.
+    The structure of `result` depends on your workflow. We assume:
+    - result['visualization'] contains the annotated image (base64 or URL)
+    - result['json'] contains the JSON summary with counts and total_cents.
+    Adjust keys according to your actual workflow output.
+    """
+    annotated_image = None
+    counts_5c = 0
+    counts_25c = 0
+    total_coins = 0
+    total_cents = 0
+
+    # Attempt to get JSON output
+    if isinstance(result, dict):
+        # JSON may be in a top-level key
+        json_data = result.get("json", {})
+        if not json_data and "output" in result:
+            json_data = result.get("output", {})
+        counts_5c = json_data.get("counts", {}).get("5c", 0)
+        counts_25c = json_data.get("counts", {}).get("25c", 0)
+        total_coins = json_data.get("total_coins", 0)
+        total_cents = json_data.get("total_cents", 0)
+
+        # Annotated image: workflow might return a base64 string or a URL.
+        vis = result.get("visualization", {})
+        if isinstance(vis, dict):
+            image_data = vis.get("base64") or vis.get("image")
+        else:
+            image_data = result.get("annotated_image")   # fallback
+
+        if image_data:
+            import base64
+            # If it's base64 string, decode
+            if isinstance(image_data, str) and image_data.startswith("data:image"):
+                # data:image/png;base64,...
+                b64 = image_data.split(",")[1]
+                img_bytes = base64.b64decode(b64)
+                annotated_image = Image.open(io.BytesIO(img_bytes))
+            elif isinstance(image_data, str) and image_data.startswith("/9j/"):  # JPEG base64 without header
+                img_bytes = base64.b64decode(image_data)
+                annotated_image = Image.open(io.BytesIO(img_bytes))
+            elif isinstance(image_data, bytes):
+                annotated_image = Image.open(io.BytesIO(image_data))
+            elif isinstance(image_data, str) and image_data.startswith("http"):
+                # URL: download
+                resp = requests.get(image_data)
+                annotated_image = Image.open(io.BytesIO(resp.content))
+
+    return annotated_image, counts_5c, counts_25c, total_coins, total_cents
+
+# -------------------------------
+# 4. Streamlit UI
+# -------------------------------
+st.title("🇵🇭 Philippine Centavo Coin Recognizer")
+st.markdown("Upload a coin image – choose between **single coin classification** or **multi‑coin detection**.")
+
+mode = st.radio("Select mode", ["Single Coin", "Multiple Coins"], horizontal=True)
+
+uploaded_file = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Display original image
+    original_image = Image.open(uploaded_file)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(original_image, caption="Uploaded Image", use_container_width=True)
+
+    if mode == "Single Coin":
+        with st.spinner("Classifying single coin..."):
+            final_label, conf, raw = predict_single_coin(original_image)
+        with col2:
+            st.success("### Classification Result")
+            st.metric("Predicted Coin", final_label)
+            st.metric("Confidence", f"{conf:.2%}")
+            st.caption(f"Raw prediction: {raw}")
+
+    else:   # Multiple Coins mode
+        with st.spinner("Running Roboflow detection workflow..."):
+            # Convert PIL image to bytes
+            img_bytes = io.BytesIO()
+            original_image.save(img_bytes, format="JPEG")
+            img_bytes = img_bytes.getvalue()
+
+            result = detect_multiple_coins(img_bytes)
+            annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
+
+        with col2:
+            st.success("### Detection Summary")
+            col2a, col2b, col2c = st.columns(3)
+            col2a.metric("5c Count", cnt5)
+            col2b.metric("25c Count", cnt25)
+            col2c.metric("Total Coins", total_coins)
+            st.metric("Total Value", f"{total_cents} cents")
+
+        if annotated_img:
+            st.image(annotated_img, caption="Annotated Output", use_container_width=True)
+        else:
+            st.warning("Annotated image not available. Raw result:")
+            st.json(result)
+
+else:
+    st.info("Please upload an image to start.")
+
+# -------------------------------
+# 5. Architecture explanation (displayed in sidebar)
+# -------------------------------
+with st.sidebar:
+    st.header("🏗️ System Architecture")
+    st.markdown("""
+    **Two independent models**:
+
+    1. **Single Coin (Classification)**  
+       - TensorFlow/Keras MobileNetV2 (frozen base)  
+       - Trained on 3 classes: `5c_front`, `5c_back`, `25c`  
+       - Input: 224×224, preprocessed with `mobilenet_v2.preprocess_input`  
+       - Output: `5c` or `25c` (after mapping front/back)
+
+    2. **Multiple Coins (Detection)**  
+       - Roboflow YOLOv12 workflow  
+       - Detects 4 classes (front/back for each coin)  
+       - Returns annotated image + JSON with counts and total value (5c=5¢, 25c=25¢)  
+       - Called via `inference_sdk`
+
+    **Streamlit** integrates both through a simple UI.  
+    The app caches the classification model and Roboflow client for performance.
+    """)
