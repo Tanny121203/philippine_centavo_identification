@@ -4,3 +4,4 @@ pillow
 inference-sdk
 requests
 numpy
+opencv-python
