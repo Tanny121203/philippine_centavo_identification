@@ -132,9 +132,16 @@ if uploaded_file is not None:
 
     else:   # Multi‑coin mode
         with st.spinner("Running Roboflow detection workflow..."):
-            # Pass PIL image directly (no bytes conversion)
-            result = detect_multiple_coins(original_image)
-            annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
+    result = detect_multiple_coins(original_image) # <-- Your existing line
+    # --- Debugging lines (add these) ---
+    with st.expander("🔍 Debug: Raw API Response"):
+        st.write(result)
+        if isinstance(result, list) and len(result) > 0:
+            st.write("--- Output 0 Top-Level Keys ---")
+            st.write(list(result[0].keys()))
+    # --- End of debugging lines ---
+    annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
+...
 
         with col2:
             st.success("### Detection Summary")
