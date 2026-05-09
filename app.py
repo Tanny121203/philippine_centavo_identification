@@ -12,7 +12,7 @@ from inference_sdk import InferenceHTTPClient
 # -------------------------------
 st.set_page_config(page_title="Philippine Centavo Recognizer", layout="wide")
 
-MODEL_PATH = "coin_model_3class.h5"
+MODEL_PATH = "coin_model_3class_improved.h5"
 ROBOFLOW_API_KEY = "zsOtQhpDpJk2J4HquyBJ"
 WORKSPACE_NAME = "jazeels-workspace-pcssh"
 WORKFLOW_ID = "detect-count-and-visualize-5"
