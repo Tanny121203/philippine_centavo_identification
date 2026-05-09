@@ -4,9 +4,8 @@ from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from PIL import Image
 import numpy as np
 import io
-import requests
-from inference_sdk import InferenceHTTPClient
 import base64
+from inference_sdk import InferenceHTTPClient
 
 # -------------------------------
 # 1. Configuration
@@ -33,7 +32,7 @@ def predict_single_coin(image: Image.Image):
     model = load_classification_model()
     img = image.convert('RGB').resize((224, 224))
     x = np.array(img)
-    x = preprocess_input(x)          # scales to [-1,1]
+    x = preprocess_input(x)
     x = np.expand_dims(x, axis=0)
     pred = model.predict(x, verbose=0)[0]
     idx = np.argmax(pred)
@@ -50,7 +49,6 @@ def get_roboflow_client():
     return InferenceHTTPClient(api_url=API_URL, api_key=ROBOFLOW_API_KEY)
 
 def detect_multiple_coins(pil_image: Image.Image):
-    """Accepts a PIL Image, sends to Roboflow workflow."""
     client = get_roboflow_client()
     result = client.run_workflow(
         workspace_name=WORKSPACE_NAME,
@@ -63,47 +61,49 @@ def detect_multiple_coins(pil_image: Image.Image):
 def parse_workflow_result(result):
     """
     Parses the Roboflow workflow output.
-    Expected structure:
-    {
-        "output_image": "base64...",
-        "predictions": [
-            {"class": "5c_back", "confidence": 0.95, ...},
-            ...
-        ]
-    }
+    Handles two possible prediction formats:
+      - List of dicts with a "class" key
+      - List of strings (direct class names)
+    Also extracts the annotated image if available.
     """
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
-    total_coins = 0
-    total_cents = 0
 
-    # The workflow may return a list or a dict; handle both
+    # If result is a list, take first element (common for workflows)
     if isinstance(result, list) and len(result) > 0:
-        result = result[0]   # take first output
+        result = result[0]
 
-    if isinstance(result, dict):
-        # Extract base64 image
-        b64_image = result.get("output_image")
-        if b64_image:
-            try:
-                if b64_image.startswith("data:image"):
-                    b64_image = b64_image.split(",")[1]
-                img_bytes = base64.b64decode(b64_image)
-                annotated_image = Image.open(io.BytesIO(img_bytes))
-            except Exception as e:
-                st.error(f"Image decode error: {e}")
+    if not isinstance(result, dict):
+        st.error(f"Unexpected result type: {type(result)}")
+        return None, 0, 0, 0, 0
 
-        # Count detections
-        predictions = result.get("predictions", [])
-        for det in predictions:
+    # Extract annotated image from base64
+    b64_image = result.get("output_image")
+    if b64_image:
+        try:
+            if b64_image.startswith("data:image"):
+                b64_image = b64_image.split(",")[1]
+            img_bytes = base64.b64decode(b64_image)
+            annotated_image = Image.open(io.BytesIO(img_bytes))
+        except Exception as e:
+            st.warning(f"Could not decode image: {e}")
+
+    # Extract predictions
+    predictions = result.get("predictions", [])
+    for det in predictions:
+        if isinstance(det, dict):
             class_name = det.get("class", "")
-            if class_name.startswith("5c"):
-                counts["5c"] += 1
-            elif class_name.startswith("25c"):
-                counts["25c"] += 1
+        elif isinstance(det, str):
+            class_name = det
+        else:
+            continue
+        if class_name.startswith("5c"):
+            counts["5c"] += 1
+        elif class_name.startswith("25c"):
+            counts["25c"] += 1
 
-        total_coins = counts["5c"] + counts["25c"]
-        total_cents = counts["5c"] * 5 + counts["25c"] * 25
+    total_coins = counts["5c"] + counts["25c"]
+    total_cents = counts["5c"] * 5 + counts["25c"] * 25
 
     return annotated_image, counts["5c"], counts["25c"], total_coins, total_cents
 
@@ -134,6 +134,9 @@ if uploaded_file is not None:
     else:   # Multiple Coins mode
         with st.spinner("Running Roboflow detection workflow..."):
             result = detect_multiple_coins(original_image)
+            # Optional debug: show raw result in an expander
+            with st.expander("🔍 Debug: Raw API Response"):
+                st.json(result)
             annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
 
         with col2:
@@ -147,8 +150,7 @@ if uploaded_file is not None:
         if annotated_img:
             st.image(annotated_img, caption="Annotated Output", width=600)
         else:
-            st.warning("Annotated image not available. Raw result:")
-            st.json(result)
+            st.warning("Annotated image not available. See debug output above.")
 
 else:
     st.info("Please upload an image to start.")
