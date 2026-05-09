@@ -34,12 +34,19 @@ def predict_single_coin(image: Image.Image):
     x = np.array(img)
     x = preprocess_input(x)
     x = np.expand_dims(x, axis=0)
-    pred = model.predict(x, verbose=0)[0]
-    idx = np.argmax(pred)
-    raw_label = CLASS_NAMES[idx]
-    confidence = pred[idx]
-    final_label = '5c' if raw_label.startswith('5c') else '25c'
-    return final_label, confidence, raw_label
+    pred = model.predict(x, verbose=0)[0]          # array of 3 probabilities
+    # Get sorted indices (highest first)
+    sorted_indices = np.argsort(pred)[::-1]
+    top_idx = sorted_indices[0]
+    second_idx = sorted_indices[1]
+    raw_label_top = CLASS_NAMES[top_idx]
+    confidence_top = pred[top_idx]
+    final_label = '5c' if raw_label_top.startswith('5c') else '25c'
+    # For the second best, also map to final label
+    raw_label_second = CLASS_NAMES[second_idx]
+    confidence_second = pred[second_idx]
+    final_label_second = '5c' if raw_label_second.startswith('5c') else '25c'
+    return final_label, confidence_top, raw_label_top, final_label_second, confidence_second, raw_label_second
 
 # -------------------------------
 # 3. Roboflow multi‑coin detection
@@ -128,13 +135,17 @@ if uploaded_file is not None:
 
     if mode == "Single Coin":
         with st.spinner("Classifying single coin..."):
-            final_label, conf, raw = predict_single_coin(original_image)
+            final_label, conf, raw, second_label, second_conf, second_raw = predict_single_coin(original_image)
         with col2:
             st.success("### Classification Result")
             st.metric("Predicted Coin", final_label)
             st.metric("Confidence", f"{conf:.2%}")
             st.caption(f"Raw prediction: {raw}")
-
+            # Show second best prediction in smaller font
+            st.markdown(
+                f"<p style='font-size:0.8rem; color:gray;'>Other possibility: {second_label} ({second_conf:.2%}) — raw: {second_raw}</p>",
+                unsafe_allow_html=True
+        )
     else:   # Multiple Coins mode
         with st.spinner("Running Roboflow detection workflow..."):
             result = detect_multiple_coins(original_image)
