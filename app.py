@@ -6,6 +6,7 @@ import numpy as np
 import io
 import requests
 from inference_sdk import InferenceHTTPClient
+import base64
 
 # -------------------------------
 # 1. Configuration
@@ -32,7 +33,7 @@ def predict_single_coin(image: Image.Image):
     model = load_classification_model()
     img = image.convert('RGB').resize((224, 224))
     x = np.array(img)
-    x = preprocess_input(x)
+    x = preprocess_input(x)          # scales to [-1,1]
     x = np.expand_dims(x, axis=0)
     pred = model.predict(x, verbose=0)[0]
     idx = np.argmax(pred)
@@ -54,77 +55,57 @@ def detect_multiple_coins(pil_image: Image.Image):
     result = client.run_workflow(
         workspace_name=WORKSPACE_NAME,
         workflow_id=WORKFLOW_ID,
-        images={"image": pil_image},   # pass PIL Image directly
+        images={"image": pil_image},
         use_cache=True
     )
     return result
 
 def parse_workflow_result(result):
     """
-    Parses the workflow output. The result is expected to be a list of dictionaries.
-    Assumes the first element contains the aggregated counts and total cents,
-    and an annotated image in base64 or URL format.
+    Parses the Roboflow workflow output.
+    Expected structure:
+    {
+        "output_image": "base64...",
+        "predictions": [
+            {"class": "5c_back", "confidence": 0.95, ...},
+            ...
+        ]
+    }
     """
     annotated_image = None
-    counts_5c = 0
-    counts_25c = 0
+    counts = {"5c": 0, "25c": 0}
     total_coins = 0
     total_cents = 0
 
-    # 1. Get the main output object (flexibly handle list or dict)
+    # The workflow may return a list or a dict; handle both
     if isinstance(result, list) and len(result) > 0:
-        output = result[0]
-    elif isinstance(result, dict):
-        output = result
-    else:
-        # If the response type is unknown, return None and log a warning
-        st.warning("The API response format is not as expected.")
-        st.json(result) # Show the raw response as a fallback
-        return annotated_image, counts_5c, counts_25c, total_coins, total_cents
+        result = result[0]   # take first output
 
-    # 2. Safely get the necessary output dictionary
-    outputs = output.get('outputs', {})
+    if isinstance(result, dict):
+        # Extract base64 image
+        b64_image = result.get("output_image")
+        if b64_image:
+            try:
+                if b64_image.startswith("data:image"):
+                    b64_image = b64_image.split(",")[1]
+                img_bytes = base64.b64decode(b64_image)
+                annotated_image = Image.open(io.BytesIO(img_bytes))
+            except Exception as e:
+                st.error(f"Image decode error: {e}")
 
-    # 3. Extract counts and totals
-    # The exact key name may vary. The most common one is 'counts'.
-    counts = outputs.get('counts', {})
-    if not counts:
-        # Fallback: try accessing a top-level "counts" dictionary in the output
-        counts = output.get('counts', {})
+        # Count detections
+        predictions = result.get("predictions", [])
+        for det in predictions:
+            class_name = det.get("class", "")
+            if class_name.startswith("5c"):
+                counts["5c"] += 1
+            elif class_name.startswith("25c"):
+                counts["25c"] += 1
 
-    counts_5c = counts.get('5c', 0)
-    counts_25c = counts.get('25c', 0)
-    total_coins = counts_5c + counts_25c
-    total_cents = (counts_5c * 5) + (counts_25c * 25)
+        total_coins = counts["5c"] + counts["25c"]
+        total_cents = counts["5c"] * 5 + counts["25c"] * 25
 
-    # 4. Extract and decode the annotated image (base64)
-    # The annotation visual might be inside 'visualization'
-    visualization = outputs.get('visualization', {})
-    if not visualization:
-        # Fallback: check top-level 'visualization' or 'annotated_image'
-        visualization = output.get('visualization', {}) or output.get('annotated_image')
-
-    # Determine the image data (could be a dictionary or a direct string)
-    image_data = None
-    if isinstance(visualization, dict):
-        # Look for base64 or image key inside the dict
-        image_data = visualization.get('base64') or visualization.get('image')
-    elif isinstance(visualization, str):
-        image_data = visualization
-
-    if image_data:
-        import base64
-        # Remove data URL prefix if it exists (e.g., "data:image/png;base64,")
-        if isinstance(image_data, str) and image_data.startswith("data:image"):
-            image_data = image_data.split(",")[1]
-        try:
-            # Decode the base64 string into bytes and then into a PIL Image
-            img_bytes = base64.b64decode(image_data)
-            annotated_image = Image.open(io.BytesIO(img_bytes))
-        except Exception as e:
-            st.error(f"Could not decode annotated image: {e}")
-
-    return annotated_image, counts_5c, counts_25c, total_coins, total_cents
+    return annotated_image, counts["5c"], counts["25c"], total_coins, total_cents
 
 # -------------------------------
 # 4. Streamlit UI
@@ -139,7 +120,6 @@ if uploaded_file is not None:
     original_image = Image.open(uploaded_file)
     col1, col2 = st.columns(2)
     with col1:
-        # Fix deprecation: use width instead of use_container_width
         st.image(original_image, caption="Uploaded Image", width=400)
 
     if mode == "Single Coin":
@@ -151,16 +131,9 @@ if uploaded_file is not None:
             st.metric("Confidence", f"{conf:.2%}")
             st.caption(f"Raw prediction: {raw}")
 
-    else:   # Multi‑coin mode
+    else:   # Multiple Coins mode
         with st.spinner("Running Roboflow detection workflow..."):
-            result = detect_multiple_coins(original_image) # <-- Your existing line
-            # --- Debugging lines (add these) ---
-            with st.expander("🔍 Debug: Raw API Response"):
-                st.write(result)
-                if isinstance(result, list) and len(result) > 0:
-                    st.write("--- Output 0 Top-Level Keys ---")
-                    st.write(list(result[0].keys()))
-            # --- End of debugging lines ---
+            result = detect_multiple_coins(original_image)
             annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
 
         with col2:
@@ -196,6 +169,4 @@ with st.sidebar:
        - Detects 4 classes (front/back for each coin)  
        - Returns annotated image + JSON with counts and total value (5c=5¢, 25c=25¢)  
        - Called via `inference_sdk`
-
-    **Streamlit** integrates both.
     """)
