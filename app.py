@@ -59,6 +59,10 @@ def detect_multiple_coins(pil_image: Image.Image):
     return result
 
 def parse_workflow_result(result):
+    """
+    Parses the Roboflow workflow output.
+    Handles multiple possible structures.
+    """
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
 
@@ -90,24 +94,30 @@ def parse_workflow_result(result):
             predictions_key = key
             break
     if predictions_key is None:
-        st.error("No predictions key found in response. Available keys: " + ", ".join(result.keys()))
+        # Debug: show the keys we have
+        st.error("No predictions key found. Available keys: " + ", ".join(result.keys()))
         return annotated_image, 0, 0, 0, 0
 
     predictions = result[predictions_key]
     for det in predictions:
+        class_name = None
+        confidence = 0
         if isinstance(det, dict):
-            # Try different possible field names
+            # Try different possible field names for class
             class_name = det.get("class") or det.get("class_name") or det.get("label") or det.get("name")
-            if not class_name:
-                continue
+            confidence = det.get("confidence", 0)
         elif isinstance(det, str):
             class_name = det
         else:
             continue
 
-        if class_name.startswith("5c"):
+        # Filter low confidence detections (adjust threshold as needed)
+        if confidence < 0.5:
+            continue
+
+        if class_name and class_name.startswith("5c"):
             counts["5c"] += 1
-        elif class_name.startswith("25c"):
+        elif class_name and class_name.startswith("25c"):
             counts["25c"] += 1
 
     total_coins = counts["5c"] + counts["25c"]
@@ -142,9 +152,20 @@ if uploaded_file is not None:
     else:   # Multiple Coins mode
         with st.spinner("Running Roboflow detection workflow..."):
             result = detect_multiple_coins(original_image)
-            # Optional debug: show raw result in an expander
-            with st.expander("🔍 Debug: Raw API Response"):
-                st.json(result)
+            
+            # ---------- DEBUG: Show result without the huge image ----------
+            result_copy = result
+            if isinstance(result_copy, list) and len(result_copy) > 0:
+                result_copy = result_copy[0]  # unwrap for display
+            if isinstance(result_copy, dict):
+                result_copy = result_copy.copy()
+                # Remove large image fields
+                for field in ["output_image", "visualization", "image", "base64"]:
+                    result_copy.pop(field, None)
+            with st.expander("🔍 Debug: Raw API Response (image omitted)"):
+                st.json(result_copy)
+            # ----------------------------------------------------------------
+            
             annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
 
         with col2:
@@ -158,7 +179,7 @@ if uploaded_file is not None:
         if annotated_img:
             st.image(annotated_img, caption="Annotated Output", width=600)
         else:
-            st.warning("Annotated image not available. See debug output above.")
+            st.warning("Annotated image not available. See debug output for raw response.")
 
 else:
     st.info("Please upload an image to start.")
