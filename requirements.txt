@@ -1,0 +1,6 @@
+streamlit
+tensorflow
+pillow
+inference-sdk
+requests
+numpy
