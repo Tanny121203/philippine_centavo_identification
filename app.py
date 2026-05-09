@@ -59,44 +59,52 @@ def detect_multiple_coins(pil_image: Image.Image):
     return result
 
 def parse_workflow_result(result):
-    """
-    Parses the Roboflow workflow output.
-    Handles two possible prediction formats:
-      - List of dicts with a "class" key
-      - List of strings (direct class names)
-    Also extracts the annotated image if available.
-    """
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
 
-    # If result is a list, take first element (common for workflows)
+    # Unwrap list and 'outputs' wrapper
     if isinstance(result, list) and len(result) > 0:
         result = result[0]
+    if isinstance(result, dict) and "outputs" in result:
+        result = result["outputs"][0]
 
     if not isinstance(result, dict):
         st.error(f"Unexpected result type: {type(result)}")
         return None, 0, 0, 0, 0
 
-    # Extract annotated image from base64
-    b64_image = result.get("output_image")
+    # Extract annotated image
+    b64_image = result.get("output_image") or result.get("image") or result.get("visualization")
     if b64_image:
         try:
-            if b64_image.startswith("data:image"):
+            if isinstance(b64_image, str) and b64_image.startswith("data:image"):
                 b64_image = b64_image.split(",")[1]
             img_bytes = base64.b64decode(b64_image)
             annotated_image = Image.open(io.BytesIO(img_bytes))
         except Exception as e:
-            st.warning(f"Could not decode image: {e}")
+            st.warning(f"Image decode error: {e}")
 
-    # Extract predictions
-    predictions = result.get("predictions", [])
+    # Try multiple possible keys for predictions
+    predictions_key = None
+    for key in ["predictions", "objects", "detections", "results"]:
+        if key in result:
+            predictions_key = key
+            break
+    if predictions_key is None:
+        st.error("No predictions key found in response. Available keys: " + ", ".join(result.keys()))
+        return annotated_image, 0, 0, 0, 0
+
+    predictions = result[predictions_key]
     for det in predictions:
         if isinstance(det, dict):
-            class_name = det.get("class", "")
+            # Try different possible field names
+            class_name = det.get("class") or det.get("class_name") or det.get("label") or det.get("name")
+            if not class_name:
+                continue
         elif isinstance(det, str):
             class_name = det
         else:
             continue
+
         if class_name.startswith("5c"):
             counts["5c"] += 1
         elif class_name.startswith("25c"):
