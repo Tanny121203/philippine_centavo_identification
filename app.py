@@ -116,6 +116,10 @@ st.markdown("Upload a coin image – choose between **single coin classification
 mode = st.radio("Select mode", ["Single Coin", "Multiple Coins"], horizontal=True)
 uploaded_file = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
 
+# Placeholders for results that need to be displayed later
+debug_result = None
+show_debug = False
+
 if uploaded_file is not None:
     original_image = Image.open(uploaded_file)
     col1, col2 = st.columns(2)
@@ -134,18 +138,6 @@ if uploaded_file is not None:
     else:   # Multiple Coins mode
         with st.spinner("Running Roboflow detection workflow..."):
             result = detect_multiple_coins(original_image)
-            
-            # Optional: Show debug without the huge image (temporary)
-            result_copy = result
-            if isinstance(result_copy, list) and len(result_copy) > 0:
-                result_copy = result_copy[0]
-            if isinstance(result_copy, dict):
-                result_copy = result_copy.copy()
-                for field in ["output_image", "visualization", "image", "base64"]:
-                    result_copy.pop(field, None)
-            with st.expander("🔍 Debug: Raw API Response"):
-                st.json(result_copy)
-            
             annotated_img, cnt5, cnt25, total_coins, total_cents = parse_workflow_result(result)
 
         with col2:
@@ -161,9 +153,31 @@ if uploaded_file is not None:
         else:
             st.warning("Annotated image not available.")
 
+        # Store the raw result for debug display at the bottom
+        debug_result = result
+        show_debug = True
+
 else:
     st.info("Please upload an image to start.")
 
+# -------------------------------
+# 5. Debug output at the bottom (only in multi-coin mode)
+# -------------------------------
+if show_debug and debug_result is not None:
+    with st.expander("🔍 Debug: Raw API Response (image omitted)"):
+        # Create a copy without the huge image fields
+        result_copy = debug_result
+        if isinstance(result_copy, list) and len(result_copy) > 0:
+            result_copy = result_copy[0]
+        if isinstance(result_copy, dict):
+            result_copy = result_copy.copy()
+            for field in ["output_image", "visualization", "image", "base64"]:
+                result_copy.pop(field, None)
+        st.json(result_copy)
+
+# -------------------------------
+# 6. Sidebar with architecture explanation
+# -------------------------------
 with st.sidebar:
     st.header("🏗️ System Architecture")
     st.markdown("""
