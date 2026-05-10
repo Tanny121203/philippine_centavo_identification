@@ -56,9 +56,13 @@ def detect_multiple_coins(pil_image: Image.Image):
     pil_image.save(buffered, format="JPEG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    # Payload format required by Roboflow workflows
     payload = {
-        "image": img_base64
+        "inputs": {
+            "image": {
+                "type": "base64",
+                "value": img_base64
+            }
+        }
     }
     headers = {"Content-Type": "application/json"}
     params = {"api_key": ROBOFLOW_API_KEY}
@@ -67,7 +71,6 @@ def detect_multiple_coins(pil_image: Image.Image):
     if response.status_code != 200:
         st.error(f"API error {response.status_code}: {response.text}")
         return {}
-
     return response.json()
 
 def parse_workflow_result(result):
