@@ -56,8 +56,12 @@ def detect_multiple_coins(pil_image: Image.Image):
     pil_image.save(buffered, format="JPEG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    # Correct payload structure for a workflow
+    # Correct REST endpoint for workflows (no /serverless)
+    url = f"https://detect.roboflow.com/infer/workflows/{WORKSPACE_NAME}/{WORKFLOW_ID}"
+
+    # API key goes **inside** the JSON body
     payload = {
+        "api_key": ROBOFLOW_API_KEY,
         "inputs": {
             "image": {
                 "type": "base64",
@@ -65,10 +69,10 @@ def detect_multiple_coins(pil_image: Image.Image):
             }
         }
     }
-    headers = {"Content-Type": "application/json"}
-    params = {"api_key": ROBOFLOW_API_KEY}
 
-    response = requests.post(WORKFLOW_URL, json=payload, headers=headers, params=params)
+    headers = {"Content-Type": "application/json"}
+
+    response = requests.post(url, json=payload, headers=headers)
     if response.status_code != 200:
         st.error(f"API error {response.status_code}: {response.text}")
         return {}
