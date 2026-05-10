@@ -56,7 +56,15 @@ def detect_multiple_coins(pil_image: Image.Image):
     pil_image.save(buffered, format="JPEG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    payload = {"image": img_base64}
+    # Correct payload structure for a workflow
+    payload = {
+        "inputs": {
+            "image": {
+                "type": "base64",
+                "value": img_base64
+            }
+        }
+    }
     headers = {"Content-Type": "application/json"}
     params = {"api_key": ROBOFLOW_API_KEY}
 
