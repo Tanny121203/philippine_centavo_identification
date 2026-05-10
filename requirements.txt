@@ -1,7 +1,6 @@
-# requirements.txt
 streamlit
 tensorflow
 pillow
-requests
+inference-sdk
 numpy
 opencv-python-headless
