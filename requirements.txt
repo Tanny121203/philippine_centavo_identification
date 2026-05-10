@@ -1,6 +1,5 @@
 streamlit
 tensorflow
 pillow
-inference-sdk
+requests
 numpy
-opencv-python-headless
