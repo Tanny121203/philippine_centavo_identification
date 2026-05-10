@@ -5,8 +5,7 @@ from PIL import Image
 import numpy as np
 import io
 import base64
-import requests
-import json
+from inference_sdk import InferenceHTTPClient
 
 # -------------------------------
 # 1. Configuration
@@ -17,8 +16,7 @@ MODEL_PATH = "coin_model_3class_improved.h5"
 ROBOFLOW_API_KEY = "zsOtQhpDpJk2J4HquyBJ"
 WORKSPACE_NAME = "jazeels-workspace-pcssh"
 WORKFLOW_ID = "detect-count-and-visualize-5"
-# REST API endpoint (uses the same workflow ID but REST endpoint)
-ROBOFLOW_REST_URL = f"https://detect.roboflow.com/{WORKSPACE_NAME}/{WORKFLOW_ID}"
+API_URL = "https://serverless.roboflow.com"
 
 # -------------------------------
 # 2. Load classification model (cached)
@@ -37,54 +35,48 @@ def predict_single_coin(image: Image.Image):
     x = preprocess_input(x)
     x = np.expand_dims(x, axis=0)
     pred = model.predict(x, verbose=0)[0]          # array of 3 probabilities
-    # Get sorted indices (highest first)
     sorted_indices = np.argsort(pred)[::-1]
     top_idx = sorted_indices[0]
     second_idx = sorted_indices[1]
     raw_label_top = CLASS_NAMES[top_idx]
     confidence_top = pred[top_idx]
     final_label = '5c' if raw_label_top.startswith('5c') else '25c'
-    # For the second best, also map to final label
     raw_label_second = CLASS_NAMES[second_idx]
     confidence_second = pred[second_idx]
     final_label_second = '5c' if raw_label_second.startswith('5c') else '25c'
-    return final_label, confidence_top, raw_label_top, final_label_second, confidence_second, raw_label_second
+    return (final_label, confidence_top, raw_label_top,
+            final_label_second, confidence_second, raw_label_second)
 
 # -------------------------------
-# 3. Roboflow multi‑coin detection via REST API (no OpenCV)
+# 3. Roboflow multi‑coin detection (using inference_sdk)
 # -------------------------------
+@st.cache_resource
+def get_roboflow_client():
+    return InferenceHTTPClient(api_url=API_URL, api_key=ROBOFLOW_API_KEY)
+
 def detect_multiple_coins(pil_image: Image.Image):
-    # Convert PIL image to base64
-    buffered = io.BytesIO()
-    pil_image.save(buffered, format="JPEG")
-    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-    payload = {
-        "image": img_base64,
-        "confidence": 0.5,
-        "overlap": 0.3,
-        "format": "image"   # request annotated image
-    }
-    headers = {
-        "Authorization": f"Bearer {ROBOFLOW_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    response = requests.post(ROBOFLOW_REST_URL, json=payload, headers=headers)
-    if response.status_code != 200:
-        st.error(f"API error {response.status_code}: {response.text}")
-        return {}
-    return response.json()
+    client = get_roboflow_client()
+    result = client.run_workflow(
+        workspace_name=WORKSPACE_NAME,
+        workflow_id=WORKFLOW_ID,
+        images={"image": pil_image},
+        use_cache=True
+    )
+    return result
 
 def parse_workflow_result(result):
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
 
+    if isinstance(result, list) and len(result) > 0:
+        result = result[0]
+
     if not isinstance(result, dict):
         st.error(f"Unexpected result type: {type(result)}")
         return None, 0, 0, 0, 0
 
-    # Extract annotated image (if returned)
-    b64_image = result.get("image") or result.get("output_image") or result.get("visualization")
+    # Extract annotated image
+    b64_image = result.get("output_image") or result.get("image") or result.get("visualization")
     if b64_image:
         try:
             if isinstance(b64_image, str) and b64_image.startswith("data:image"):
@@ -94,8 +86,14 @@ def parse_workflow_result(result):
         except Exception as e:
             st.warning(f"Image decode error: {e}")
 
-    # Extract predictions – REST API returns a list under "predictions"
-    predictions_list = result.get("predictions", [])
+    # Navigate to predictions
+    predictions_data = result.get("predictions", {})
+    predictions_list = predictions_data.get("predictions", [])
+    if not predictions_list and "predictions" in result:
+        predictions_list = result["predictions"]
+        if isinstance(predictions_list, dict):
+            predictions_list = predictions_list.get("predictions", [])
+
     for det in predictions_list:
         class_name = det.get("class", "")
         confidence = det.get("confidence", 0)
@@ -120,7 +118,6 @@ st.markdown("Upload a coin image – choose between **single coin classification
 mode = st.radio("Select mode", ["Single Coin", "Multiple Coins"], horizontal=True)
 uploaded_file = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
 
-# Placeholders for results that need to be displayed later
 debug_result = None
 show_debug = False
 
@@ -132,13 +129,13 @@ if uploaded_file is not None:
 
     if mode == "Single Coin":
         with st.spinner("Classifying single coin..."):
-            final_label, conf, raw, second_label, second_conf, second_raw = predict_single_coin(original_image)
+            (final_label, conf, raw,
+             second_label, second_conf, second_raw) = predict_single_coin(original_image)
         with col2:
             st.success("### Classification Result")
             st.metric("Predicted Coin", final_label)
             st.metric("Confidence", f"{conf:.2%}")
             st.caption(f"Raw prediction: {raw}")
-            # Show second best prediction in smaller font
             st.markdown(
                 f"<p style='font-size:0.8rem; color:gray;'>Other possibility: {second_label} ({second_conf:.2%}) — raw: {second_raw}</p>",
                 unsafe_allow_html=True
@@ -162,7 +159,6 @@ if uploaded_file is not None:
         else:
             st.warning("Annotated image not available.")
 
-        # Store the raw result for debug display at the bottom
         debug_result = result
         show_debug = True
 
@@ -174,11 +170,12 @@ else:
 # -------------------------------
 if show_debug and debug_result is not None:
     with st.expander("🔍 Debug: Raw API Response (image omitted)"):
-        # Create a copy without the huge image fields
         result_copy = debug_result
+        if isinstance(result_copy, list) and len(result_copy) > 0:
+            result_copy = result_copy[0]
         if isinstance(result_copy, dict):
             result_copy = result_copy.copy()
-            for field in ["image", "output_image", "visualization", "base64"]:
+            for field in ["output_image", "visualization", "image", "base64"]:
                 result_copy.pop(field, None)
         st.json(result_copy)
 
@@ -200,5 +197,5 @@ with st.sidebar:
        - Roboflow YOLOv12 workflow  
        - Detects 4 classes (front/back for each coin)  
        - Returns annotated image + JSON with counts and total value (5c=5¢, 25c=25¢)  
-       - Called via direct REST API (no OpenCV dependency)
+       - Called via `inference_sdk`
     """)
