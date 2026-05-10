@@ -6,7 +6,6 @@ import numpy as np
 import io
 import base64
 import requests
-import json
 
 # -------------------------------
 # 1. Configuration
@@ -35,7 +34,7 @@ def predict_single_coin(image: Image.Image):
     x = np.array(img)
     x = preprocess_input(x)
     x = np.expand_dims(x, axis=0)
-    pred = model.predict(x, verbose=0)[0]          # array of 3 probabilities
+    pred = model.predict(x, verbose=0)[0]
     sorted_indices = np.argsort(pred)[::-1]
     top_idx = sorted_indices[0]
     second_idx = sorted_indices[1]
@@ -49,7 +48,7 @@ def predict_single_coin(image: Image.Image):
             final_label_second, confidence_second, raw_label_second)
 
 # -------------------------------
-# 3. Roboflow multi‑coin detection (pure REST, no OpenCV)
+# 3. Roboflow multi‑coin detection (pure REST)
 # -------------------------------
 def detect_multiple_coins(pil_image: Image.Image):
     # Convert PIL image to Base64
@@ -57,20 +56,18 @@ def detect_multiple_coins(pil_image: Image.Image):
     pil_image.save(buffered, format="JPEG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+    # Payload format required by Roboflow workflows
     payload = {
         "image": img_base64
     }
-    headers = {
-        "Content-Type": "application/json"
-    }
-    params = {
-        "api_key": ROBOFLOW_API_KEY
-    }
+    headers = {"Content-Type": "application/json"}
+    params = {"api_key": ROBOFLOW_API_KEY}
 
     response = requests.post(WORKFLOW_URL, json=payload, headers=headers, params=params)
     if response.status_code != 200:
         st.error(f"API error {response.status_code}: {response.text}")
         return {}
+
     return response.json()
 
 def parse_workflow_result(result):
@@ -81,8 +78,17 @@ def parse_workflow_result(result):
         st.error(f"Unexpected result type: {type(result)}")
         return None, 0, 0, 0, 0
 
-    # Extract annotated image (if any)
-    b64_image = result.get("output_image") or result.get("image") or result.get("visualization")
+    # The response from a workflow usually contains an "outputs" list
+    outputs = result.get("outputs", [])
+    if outputs:
+        # Take the first output (your workflow likely has one output)
+        output = outputs[0]
+    else:
+        # Fallback: maybe the result is the output itself
+        output = result
+
+    # Extract annotated image (base64) – the field name varies
+    b64_image = output.get("output_image") or output.get("image") or output.get("visualization")
     if b64_image:
         try:
             if isinstance(b64_image, str) and b64_image.startswith("data:image"):
@@ -92,11 +98,12 @@ def parse_workflow_result(result):
         except Exception as e:
             st.warning(f"Image decode error: {e}")
 
-    # Extract predictions – adjust according to your workflow's output structure
-    predictions = result.get("predictions", [])
+    # Extract predictions
+    predictions = output.get("predictions", [])
     # If predictions is a dict with a "predictions" key (like your earlier output)
     if isinstance(predictions, dict):
         predictions = predictions.get("predictions", [])
+
     for det in predictions:
         class_name = det.get("class", "")
         confidence = det.get("confidence", 0)
@@ -181,7 +188,7 @@ if show_debug and debug_result is not None:
         st.json(result_copy)
 
 # -------------------------------
-# 6. Sidebar with architecture explanation
+# 6. Sidebar
 # -------------------------------
 with st.sidebar:
     st.header("🏗️ System Architecture")
@@ -191,12 +198,10 @@ with st.sidebar:
     1. **Single Coin (Classification)**  
        - TensorFlow/Keras MobileNetV2 (frozen base)  
        - Trained on 3 classes: `5c_front`, `5c_back`, `25c`  
-       - Input: 224×224, preprocessed with `mobilenet_v2.preprocess_input`  
-       - Output: `5c` or `25c` (after mapping)
+       - Output: `5c` or `25c`
 
     2. **Multiple Coins (Detection)**  
        - Roboflow YOLOv12 workflow  
-       - Detects 4 classes (front/back for each coin)  
-       - Returns annotated image + JSON with counts and total value (5c=5¢, 25c=25¢)  
-       - Called via **pure REST API** (no OpenCV, no system dependencies)
+       - Called via **pure REST API** – no OpenCV, no system dependencies
+       - Returns annotated image + counts + total value
     """)
