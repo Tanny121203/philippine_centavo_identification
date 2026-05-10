@@ -77,7 +77,9 @@ def detect_multiple_coins(pil_image: Image.Image):
         st.error(f"API error {response.status_code}: {response.text}")
         return {}
     return response.json()
-
+    # Inside the multi‑coin mode, after getting `result`:
+    st.write("### Full API Response (for debugging)")
+    st.json(result)   # this will show the whole structure
 def parse_workflow_result(result):
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
@@ -86,29 +88,43 @@ def parse_workflow_result(result):
         st.error(f"Unexpected result type: {type(result)}")
         return None, 0, 0, 0, 0
 
-    # The response from a workflow often contains an "outputs" list
-    outputs = result.get("outputs", [])
-    if outputs:
+    # Unwrap if the result has an 'outputs' list
+    outputs = result.get("outputs")
+    if outputs and isinstance(outputs, list) and len(outputs) > 0:
         output = outputs[0]
     else:
-        # Fallback: maybe the result itself is the output
         output = result
 
-    # Extract annotated image (base64) – the field name can be "image", "output_image", etc.
-    b64_image = output.get("output_image") or output.get("image") or output.get("visualization")
-    if b64_image:
+    # ----- 1. Extract annotated image -----
+    b64_image = None
+    # Try common keys
+    for key in ["image", "output_image", "visualization", "base64"]:
+        val = output.get(key)
+        if val:
+            b64_image = val
+            break
+    # If b64_image is a dict, try to extract its 'value' or 'base64' subfield
+    if isinstance(b64_image, dict):
+        b64_image = b64_image.get("value") or b64_image.get("base64") or b64_image.get("image")
+    if b64_image and isinstance(b64_image, str):
         try:
-            if isinstance(b64_image, str) and b64_image.startswith("data:image"):
+            if b64_image.startswith("data:image"):
                 b64_image = b64_image.split(",")[1]
             img_bytes = base64.b64decode(b64_image)
             annotated_image = Image.open(io.BytesIO(img_bytes))
         except Exception as e:
             st.warning(f"Image decode error: {e}")
 
-    # Extract predictions
+    # ----- 2. Extract predictions -----
     predictions = output.get("predictions", [])
+    # If predictions is a dict, it might have a "predictions" key inside
     if isinstance(predictions, dict):
         predictions = predictions.get("predictions", [])
+    # If still not a list, try the top-level "predictions" from the result
+    if not predictions and "predictions" in result:
+        predictions = result.get("predictions", [])
+        if isinstance(predictions, dict):
+            predictions = predictions.get("predictions", [])
 
     for det in predictions:
         class_name = det.get("class", "")
