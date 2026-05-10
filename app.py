@@ -17,7 +17,7 @@ MODEL_PATH = "coin_model_3class_improved.h5"
 ROBOFLOW_API_KEY = "zsOtQhpDpJk2J4HquyBJ"
 WORKSPACE_NAME = "jazeels-workspace-pcssh"
 WORKFLOW_ID = "detect-count-and-visualize-5"
-WORKFLOW_URL = f"https://serverless.roboflow.com/jazeels-workspace-pcssh/workflows/detect-count-and-visualize-5"
+WORKFLOW_URL = f"https://serverless.roboflow.com/{WORKSPACE_NAME}/workflows/{WORKFLOW_ID}"
 
 # -------------------------------
 # 2. Load classification model (cached)
