@@ -26,24 +26,28 @@ def load_classification_model():
     model = tf.keras.models.load_model(MODEL_PATH)
     return model
 
-CLASS_NAMES = ['5c_front', '5c_back', '25c']
+CLASS_NAMES = ['25c', '5c_back', '5c_front']
 
 def predict_single_coin(image: Image.Image):
     model = load_classification_model()
-    img = image.convert('RGB').resize((224, 224))
+    # Resize using Lanczos for consistency with tf.image.resize
+    img = image.convert('RGB').resize((224, 224), Image.Resampling.LANCZOS)
     x = np.array(img)
-    x = preprocess_input(x)
+    x = preprocess_input(x)          # scales to [-1, 1]
     x = np.expand_dims(x, axis=0)
     pred = model.predict(x, verbose=0)[0]
     sorted_indices = np.argsort(pred)[::-1]
     top_idx = sorted_indices[0]
     second_idx = sorted_indices[1]
+
     raw_label_top = CLASS_NAMES[top_idx]
     confidence_top = pred[top_idx]
     final_label = '5c' if raw_label_top.startswith('5c') else '25c'
+
     raw_label_second = CLASS_NAMES[second_idx]
     confidence_second = pred[second_idx]
     final_label_second = '5c' if raw_label_second.startswith('5c') else '25c'
+
     return (final_label, confidence_top, raw_label_top,
             final_label_second, confidence_second, raw_label_second)
 
