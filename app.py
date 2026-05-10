@@ -1,3 +1,5 @@
+import cv2
+cv2.setNumThreads(0)
 import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
