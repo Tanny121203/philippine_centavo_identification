@@ -5,7 +5,8 @@ from PIL import Image
 import numpy as np
 import io
 import base64
-from inference_sdk import InferenceHTTPClient
+import requests
+import json
 
 # -------------------------------
 # 1. Configuration
@@ -16,7 +17,7 @@ MODEL_PATH = "coin_model_3class_improved.h5"
 ROBOFLOW_API_KEY = "zsOtQhpDpJk2J4HquyBJ"
 WORKSPACE_NAME = "jazeels-workspace-pcssh"
 WORKFLOW_ID = "detect-count-and-visualize-5"
-API_URL = "https://serverless.roboflow.com"
+WORKFLOW_URL = f"https://serverless.roboflow.com/jazeels-workspace-pcssh/workflows/detect-count-and-visualize-5"
 
 # -------------------------------
 # 2. Load classification model (cached)
@@ -48,34 +49,39 @@ def predict_single_coin(image: Image.Image):
             final_label_second, confidence_second, raw_label_second)
 
 # -------------------------------
-# 3. Roboflow multi‑coin detection (using inference_sdk)
+# 3. Roboflow multi‑coin detection (pure REST, no OpenCV)
 # -------------------------------
-@st.cache_resource
-def get_roboflow_client():
-    return InferenceHTTPClient(api_url=API_URL, api_key=ROBOFLOW_API_KEY)
-
 def detect_multiple_coins(pil_image: Image.Image):
-    client = get_roboflow_client()
-    result = client.run_workflow(
-        workspace_name=WORKSPACE_NAME,
-        workflow_id=WORKFLOW_ID,
-        images={"image": pil_image},
-        use_cache=True
-    )
-    return result
+    # Convert PIL image to Base64
+    buffered = io.BytesIO()
+    pil_image.save(buffered, format="JPEG")
+    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    payload = {
+        "image": img_base64
+    }
+    headers = {
+        "Content-Type": "application/json"
+    }
+    params = {
+        "api_key": ROBOFLOW_API_KEY
+    }
+
+    response = requests.post(WORKFLOW_URL, json=payload, headers=headers, params=params)
+    if response.status_code != 200:
+        st.error(f"API error {response.status_code}: {response.text}")
+        return {}
+    return response.json()
 
 def parse_workflow_result(result):
     annotated_image = None
     counts = {"5c": 0, "25c": 0}
 
-    if isinstance(result, list) and len(result) > 0:
-        result = result[0]
-
     if not isinstance(result, dict):
         st.error(f"Unexpected result type: {type(result)}")
         return None, 0, 0, 0, 0
 
-    # Extract annotated image
+    # Extract annotated image (if any)
     b64_image = result.get("output_image") or result.get("image") or result.get("visualization")
     if b64_image:
         try:
@@ -86,15 +92,12 @@ def parse_workflow_result(result):
         except Exception as e:
             st.warning(f"Image decode error: {e}")
 
-    # Navigate to predictions
-    predictions_data = result.get("predictions", {})
-    predictions_list = predictions_data.get("predictions", [])
-    if not predictions_list and "predictions" in result:
-        predictions_list = result["predictions"]
-        if isinstance(predictions_list, dict):
-            predictions_list = predictions_list.get("predictions", [])
-
-    for det in predictions_list:
+    # Extract predictions – adjust according to your workflow's output structure
+    predictions = result.get("predictions", [])
+    # If predictions is a dict with a "predictions" key (like your earlier output)
+    if isinstance(predictions, dict):
+        predictions = predictions.get("predictions", [])
+    for det in predictions:
         class_name = det.get("class", "")
         confidence = det.get("confidence", 0)
         if confidence < 0.5:
@@ -171,8 +174,6 @@ else:
 if show_debug and debug_result is not None:
     with st.expander("🔍 Debug: Raw API Response (image omitted)"):
         result_copy = debug_result
-        if isinstance(result_copy, list) and len(result_copy) > 0:
-            result_copy = result_copy[0]
         if isinstance(result_copy, dict):
             result_copy = result_copy.copy()
             for field in ["output_image", "visualization", "image", "base64"]:
@@ -197,5 +198,5 @@ with st.sidebar:
        - Roboflow YOLOv12 workflow  
        - Detects 4 classes (front/back for each coin)  
        - Returns annotated image + JSON with counts and total value (5c=5¢, 25c=25¢)  
-       - Called via `inference_sdk`
+       - Called via **pure REST API** (no OpenCV, no system dependencies)
     """)
