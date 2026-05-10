@@ -48,7 +48,7 @@ def predict_single_coin(image: Image.Image):
             final_label_second, confidence_second, raw_label_second)
 
 # -------------------------------
-# 3. Roboflow multi‑coin detection (pure REST)
+# 3. Roboflow multi‑coin detection (pure REST, no OpenCV)
 # -------------------------------
 def detect_multiple_coins(pil_image: Image.Image):
     # Convert PIL image to Base64
@@ -56,14 +56,7 @@ def detect_multiple_coins(pil_image: Image.Image):
     pil_image.save(buffered, format="JPEG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    payload = {
-        "inputs": {
-            "image": {
-                "type": "base64",
-                "value": img_base64
-            }
-        }
-    }
+    payload = {"image": img_base64}
     headers = {"Content-Type": "application/json"}
     params = {"api_key": ROBOFLOW_API_KEY}
 
@@ -81,16 +74,15 @@ def parse_workflow_result(result):
         st.error(f"Unexpected result type: {type(result)}")
         return None, 0, 0, 0, 0
 
-    # The response from a workflow usually contains an "outputs" list
+    # The response from a workflow often contains an "outputs" list
     outputs = result.get("outputs", [])
     if outputs:
-        # Take the first output (your workflow likely has one output)
         output = outputs[0]
     else:
-        # Fallback: maybe the result is the output itself
+        # Fallback: maybe the result itself is the output
         output = result
 
-    # Extract annotated image (base64) – the field name varies
+    # Extract annotated image (base64) – the field name can be "image", "output_image", etc.
     b64_image = output.get("output_image") or output.get("image") or output.get("visualization")
     if b64_image:
         try:
@@ -103,7 +95,6 @@ def parse_workflow_result(result):
 
     # Extract predictions
     predictions = output.get("predictions", [])
-    # If predictions is a dict with a "predictions" key (like your earlier output)
     if isinstance(predictions, dict):
         predictions = predictions.get("predictions", [])
 
@@ -191,7 +182,7 @@ if show_debug and debug_result is not None:
         st.json(result_copy)
 
 # -------------------------------
-# 6. Sidebar
+# 6. Sidebar with architecture explanation
 # -------------------------------
 with st.sidebar:
     st.header("🏗️ System Architecture")
@@ -201,10 +192,10 @@ with st.sidebar:
     1. **Single Coin (Classification)**  
        - TensorFlow/Keras MobileNetV2 (frozen base)  
        - Trained on 3 classes: `5c_front`, `5c_back`, `25c`  
-       - Output: `5c` or `25c`
+       - Output: `5c` or `25c` (after mapping)
 
     2. **Multiple Coins (Detection)**  
        - Roboflow YOLOv12 workflow  
-       - Called via **pure REST API** – no OpenCV, no system dependencies
+       - Called via **pure REST API** – no OpenCV, no system dependencies  
        - Returns annotated image + counts + total value
     """)
